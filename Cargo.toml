@@ -1,0 +1,28 @@
+[package]
+name = "pg_dbsp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "pgrx_embed_pg_dbsp"
+path = "src/bin/pgrx_embed.rs"
+
+[features]
+default = ["pg18"]
+pg18 = ["pgrx/pg18"]
+pg_test = []
+
+[dependencies]
+dbsp = "=0.198.0"
+pgrx = "=0.17.0"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"

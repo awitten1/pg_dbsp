@@ -1,0 +1,4 @@
+# DBSP 0.198.0 bundles mimalloc C code that uses ATOMIC_VAR_INIT.
+# GCC 15's default C23 mode removes that macro; C11 keeps it available.
+[env]
+CFLAGS = { value = "-std=gnu11", force = false }
