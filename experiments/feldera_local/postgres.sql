@@ -4,6 +4,12 @@ CREATE TABLE IF NOT EXISTS public.events (
     amount BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.feldera_group_totals (
+    group_key TEXT PRIMARY KEY,
+    row_count BIGINT NOT NULL,
+    total_amount BIGINT NOT NULL
+);
+
 ALTER TABLE public.events REPLICA IDENTITY FULL;
 
 DO $$

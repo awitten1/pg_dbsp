@@ -48,7 +48,7 @@ start_manager() {
     fi
     mkdir -p "$state/compiler" "$state/runner" "$state/demos"
     cd "$root"
-    nohup "$state/pipeline-manager" \
+    manager_command=("$state/pipeline-manager" \
         --api-port 18080 --compiler-port 18085 --runner-port 18089 \
         --db-connection-string "postgres://$pg_user@127.0.0.1:$pg_port/feldera_manager" \
         --sql-compiler-path "$state/sql2dbsp-jar-with-dependencies-v0.378.0.jar" \
@@ -56,18 +56,34 @@ start_manager() {
         --compilation-cargo-lock-path "$state/source/Cargo.lock" \
         --compiler-working-directory "$state/compiler" \
         --runner-working-directory "$state/runner" \
-        --compilation-profile dev --demos-dir "$state/demos" \
-        >"$state/manager.log" 2>&1 &
-    echo $! > "$state/manager.pid"
+        --compilation-profile dev --demos-dir "$state/demos")
+    if systemctl --user show-environment >/dev/null 2>&1; then
+        manager_unit="pg-dbsp-feldera-$(date +%s)-$$.service"
+        systemd-run --user --unit="$manager_unit" --collect \
+            --working-directory="$root" --setenv="PATH=$PATH" \
+            "${manager_command[@]}" >/dev/null
+        rm -f "$state/manager.pid"
+        echo "$manager_unit" > "$state/manager.unit"
+    else
+        nohup "${manager_command[@]}" >"$state/manager.log" 2>&1 &
+        rm -f "$state/manager.unit"
+        echo $! > "$state/manager.pid"
+    fi
     for ((i=0; i<60; i++)); do
         if manager_running; then return; fi
-        if ! kill -0 "$(cat "$state/manager.pid")" 2>/dev/null; then
-            tail -40 "$state/manager.log" >&2
-            exit 1
+        if [[ -f "$state/manager.pid" ]]; then
+            if ! kill -0 "$(cat "$state/manager.pid")" 2>/dev/null; then
+                tail -40 "$state/manager.log" >&2
+                exit 1
+            fi
         fi
         sleep 1
     done
-    tail -40 "$state/manager.log" >&2
+    if [[ -f "$state/manager.unit" ]]; then
+        journalctl --user -u "$(cat "$state/manager.unit")" -n 40 --no-pager >&2
+    else
+        tail -40 "$state/manager.log" >&2
+    fi
     echo 'Feldera did not become ready.' >&2
     exit 1
 }
@@ -79,7 +95,7 @@ pipeline_status() {
 deploy_pipeline() {
     sed "s/__PG_USER__/$pg_user/g" "$here/program.sql" > "$state/program.sql"
     jq -n --rawfile code "$state/program.sql" \
-        '{name:"feldera-local-cdc",description:"Local PostgreSQL CDC experiment",runtime_config:{workers:2},program_config:{profile:"dev"},program_code:$code}' |
+        '{name:"feldera-local-cdc",description:"Local PostgreSQL CDC experiment",runtime_config:{workers:2,provisioning_timeout:"3m"},program_config:{profile:"dev"},program_code:$code}' |
         curl -fsS -X PUT "$api/pipelines/$pipeline" \
             -H 'Content-Type: application/json' --data-binary @- >/dev/null
     for ((i=0; i<120; i++)); do
@@ -100,7 +116,7 @@ deploy_pipeline() {
 
 start_pipeline() {
     curl -fsS -X POST "$api/pipelines/$pipeline/start" >/dev/null
-    for ((i=0; i<120; i++)); do
+    for ((i=0; i<300; i++)); do
         local status error
         status="$(pipeline_status | jq -r .deployment_status)"
         case "$status" in
@@ -126,15 +142,16 @@ wait_for_snapshot() {
         view="$(curl -fsSG "$api/pipelines/$pipeline/query" \
             --data-urlencode 'sql=SELECT * FROM group_totals ORDER BY group_key' \
             --data-urlencode 'format=text' 2>/dev/null || true)"
-        if [[ "$view" == *east* && "$view" == *west* ]]; then
-            echo 'Feldera initial PostgreSQL snapshot is visible.'
+        if [[ "$view" == *east* && "$view" == *west* ]] &&
+            [[ "$(psql_demo -Atq -f "$here/compare.sql")" == t ]]; then
+            echo 'Feldera snapshot and PostgreSQL output table are ready.'
             return
         fi
-        if (( i % 10 == 0 )); then echo 'Waiting for PostgreSQL CDC snapshot...'; fi
+        if (( i % 10 == 0 )); then echo 'Waiting for CDC snapshot and PostgreSQL output...'; fi
         sleep 1
     done
     pipeline_status | jq '{deployment_status,deployment_error,connectors}' >&2
-    echo 'Feldera did not show the initial rows within 3 minutes.' >&2
+    echo 'Feldera did not materialize the initial rows in PostgreSQL within 3 minutes.' >&2
     exit 1
 }
 
@@ -163,6 +180,9 @@ case "${1:-}" in
             --data-urlencode 'sql=SELECT * FROM group_totals ORDER BY group_key' \
             --data-urlencode 'format=text'
         echo
+        echo 'PostgreSQL output table:'
+        psql_demo -c 'SELECT * FROM public.feldera_group_totals ORDER BY group_key'
+        echo "Output matches source aggregate: $(psql_demo -Atq -f "$here/compare.sql")"
         echo 'Replication slot:'
         psql_demo -c "SELECT slot_name, confirmed_flush_lsn FROM pg_replication_slots WHERE plugin = 'pgoutput'"
         ;;
@@ -184,6 +204,10 @@ case "${1:-}" in
                 tr '\0' ' ' < "/proc/$manager_pid/cmdline" | grep -Fq "$state/pipeline-manager"; then
                 kill "$manager_pid"
             fi
+        fi
+        if [[ -f "$state/manager.unit" ]]; then
+            systemctl --user stop "$(cat "$state/manager.unit")" >/dev/null 2>&1 || true
+            rm -f "$state/manager.unit"
         fi
         if [[ -f "$pg_data/PG_VERSION" ]] && "$pg_bin/pg_ctl" -D "$pg_data" status >/dev/null 2>&1; then
             "$pg_bin/pg_ctl" -D "$pg_data" -w stop

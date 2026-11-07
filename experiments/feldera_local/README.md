@@ -3,7 +3,8 @@
 This runs two host processes: the repository's PostgreSQL 18 build and a local
 Feldera pipeline manager. There are no containers or cloud services. PostgreSQL
 publishes `public.events` through logical replication; Feldera snapshots it,
-follows changes, and incrementally maintains `group_totals`.
+follows changes, incrementally maintains `group_totals`, and writes that view
+to `public.feldera_group_totals` in the same PostgreSQL database.
 
 ## Start
 
@@ -26,12 +27,15 @@ Open the local Feldera console at <http://127.0.0.1:18080>. PostgreSQL listens
 on `127.0.0.1:55434`, and `run.sh sql` opens `psql` there. This experiment uses
 PostgreSQL trust authentication on loopback and the current OS user as a
 PostgreSQL superuser, so keep it on a development machine.
+On Linux systems with a user systemd manager, `run.sh` starts Feldera as a
+temporary user service; its logs are available with `journalctl --user`.
 
 ## Try changes
 
 The initial PostgreSQL rows are `(1, east, 10)`, `(2, east, 20)`, and
 `(3, west, 7)`. `run.sh status` shows the PostgreSQL `GROUP BY`, Feldera's
-materialized view, and the replication slot's acknowledged LSN.
+materialized view, the PostgreSQL output table, whether the output matches the
+source aggregate, and the replication slot's acknowledged LSN.
 
 ```sh
 ./experiments/feldera_local/run.sh sql -c "INSERT INTO public.events VALUES (4, 'west', 5)"
@@ -50,6 +54,12 @@ outputs. To watch changes directly, run this in a separate terminal:
 ```sh
 curl -N -X POST 'http://127.0.0.1:18080/v0/pipelines/feldera-local-cdc/egress/GROUP_TOTALS?format=json&send_snapshot=true'
 ```
+
+The output connector uses Feldera's `materialized` PostgreSQL mode: it updates
+and deletes target rows as the view changes. Its Feldera index on `group_key`
+corresponds to the target table's primary key. The target table is not in the
+`feldera_events` publication, so Feldera does not read its own output back.
+The connector requests an initial snapshot before streaming later changes.
 
 Edit [program.sql](program.sql) to try a different Feldera query. Its source
 URI contains `__PG_USER__`, which `run.sh` replaces with the current OS user.
@@ -75,5 +85,6 @@ snapshot is required after a stopped open source pipeline because this setup
 does not configure Feldera fault tolerant checkpoints.
 
 References: [Feldera's PostgreSQL CDC connector](https://docs.feldera.com/connectors/sources/postgresql-cdc/),
+[PostgreSQL output connector](https://docs.feldera.com/connectors/sinks/postgresql/),
 [native source startup](https://github.com/feldera/feldera#%EF%B8%8F-running-feldera-from-sources),
 and [REST API tutorial](https://docs.feldera.com/tutorials/rest_api/).

@@ -18,7 +18,23 @@ CREATE TABLE events (
     }]'
 );
 
-CREATE MATERIALIZED VIEW group_totals AS
+CREATE MATERIALIZED VIEW group_totals WITH (
+    'connectors' = '[{
+        "name": "postgres_group_totals_output",
+        "index": "group_totals_idx",
+        "send_snapshot": true,
+        "transport": {
+            "name": "postgres_output",
+            "config": {
+                "uri": "postgres://__PG_USER__@127.0.0.1:55434/postgres",
+                "table": "feldera_group_totals",
+                "mode": "materialized"
+            }
+        }
+    }]'
+) AS
 SELECT group_key, COUNT(*) AS row_count, SUM(amount) AS total_amount
 FROM events
 GROUP BY group_key;
+
+CREATE INDEX group_totals_idx ON group_totals(group_key);
