@@ -35,3 +35,10 @@ postgres/install/bin/pg_ctl -D .pgrx/data-18 -w stop
 ```
 
 `dbsp_smoke_test()` should return `t`. Set `LIBCLANG_PATH` to your LLVM library directory if bindgen cannot find libclang. The `sql/` directory is reserved for future handwritten extension upgrade scripts; pgrx generates the initial install SQL during `cargo pgrx install`.
+
+## Native Feldera comparison
+
+The [local Feldera CDC experiment](experiments/feldera_local/README.md) runs
+Feldera and a separate PostgreSQL 18 cluster as host processes. It snapshots a
+source table through PostgreSQL logical replication and maintains an aggregate
+view for a native CDC trial.
