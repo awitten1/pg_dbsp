@@ -1,0 +1,69 @@
+name: pg-dbsp-feldera-docker
+
+services:
+  postgres:
+    image: postgres:18.6
+    platform: linux/arm64
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: feldera-local
+      POSTGRES_DB: postgres
+    command: [postgres, -c, wal_level=logical, -c, max_replication_slots=10, -c, max_wal_senders=10]
+    ports:
+      - "127.0.0.1:55434:5432"
+    volumes:
+      # PostgreSQL 18 uses a version-specific PGDATA below this directory.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+
+  pipeline-manager:
+    image: images.feldera.com/feldera/pipeline-manager:0.378.0@sha256:ce3adb24c1b80dd39522b8354a3bf3af79389bbe2d10ebb33ef26ec8a9f2a53a
+    platform: linux/arm64
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - --db-connection-string=postgres://postgres:feldera-local@postgres:5432/feldera_manager
+      - --allowed-origins=http://127.0.0.1:18080
+      - --allowed-origins=http://localhost:18080
+      - --compiler-working-directory=/home/ubuntu/.feldera/compiler
+      - --runner-working-directory=/home/ubuntu/.feldera/local-runner
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      # Docker seeds a new volume with the image's precompiled dependencies.
+      - compiler-cache:/home/ubuntu/.feldera/compiler
+      - runner-state:/home/ubuntu/.feldera/local-runner
+    configs:
+      - source: cargo-config
+        target: /home/ubuntu/.cargo/config.toml
+    environment:
+      RUST_LOG: info,actix_web=error,tokio_postgres=info
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://localhost:8080/healthz]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    restart: "no"
+
+configs:
+  # Feldera clears CARGO_BUILD_JOBS from the compiler's environment. Cargo's
+  # config file enforces the limit even for that sanitized child process.
+  cargo-config:
+    content: |
+      [build]
+      jobs = 2
+
+volumes:
+  pgdata:
+    name: pg_dbsp_feldera_docker_pgdata
+  compiler-cache:
+    name: pg_dbsp_feldera_docker_compiler_cache
+  runner-state:
+    name: pg_dbsp_feldera_docker_runner_state

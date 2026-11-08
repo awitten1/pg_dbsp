@@ -1,4 +1,65 @@
-# Native Feldera + PostgreSQL CDC experiment
+# Feldera + PostgreSQL CDC experiment
+
+## macOS / Apple Silicon (Docker)
+
+Start Docker Desktop first, then use the script below with `jq` and `curl`.
+Host Rust, Java, and PostgreSQL builds are not needed. The pinned Feldera
+**0.378.0** image and PostgreSQL **18.6** run as Linux ARM64 containers.
+
+From the repository root:
+
+```sh
+./experiments/feldera_local/run-docker.sh start
+./experiments/feldera_local/run-docker.sh status
+./experiments/feldera_local/run-docker.sh sql -c "INSERT INTO public.events VALUES (4, 'west', 5)"
+./experiments/feldera_local/run-docker.sh sql
+./experiments/feldera_local/run-docker.sh logs
+```
+
+The script waits for both services, deploys `program-docker.sql`, and verifies
+that the initial snapshot reaches the PostgreSQL output table. Pipeline compilation may
+take several minutes; progress and startup errors are printed. Use `logs` to
+inspect service logs. The first compiler volume is seeded with the image's
+precompiled dependencies. The pipeline uses the matching
+`optimized` compilation profile, two Cargo compilation jobs, and two workers.
+
+Open <http://127.0.0.1:18080>. PostgreSQL is available at
+`postgresql://postgres:feldera-local@127.0.0.1:55434/postgres`.
+Both published ports bind to loopback. The fixed password is for this isolated
+development database. These are the same host ports as the Linux experiment;
+stop that experiment before starting the Docker version.
+
+```sh
+./experiments/feldera_local/run-docker.sh stop
+./experiments/feldera_local/run-docker.sh reset
+./experiments/feldera_local/run-docker.sh start
+```
+
+`stop` preserves the database, runner state, and compiler cache. Since this
+trial does not configure fault-tolerant checkpoints, **reset is required after
+a stopped or interrupted pipeline startup**. Repeating `start` while the
+pipeline is still running simply reports its status. `reset` deletes only the
+Docker experiment's database and runner volumes, preserving the compiler cache.
+It deletes the source rows you added, so export any data you want to keep first.
+
+Service definitions are in `compose-docker.yml`; `run-docker.sh` handles database
+initialization, SQL deployment, readiness checks, and the fresh-snapshot guard.
+Edit [program-docker.sql](program-docker.sql) to change the Docker pipeline's
+queries or connector settings. It contains the Docker database address directly;
+the runner uploads the file without substitution. The Linux runner continues to
+use `program.sql`. Runner markers live in the ignored `.tools/feldera-docker`
+directory. Do not start the containers directly with Compose after stopping:
+that bypasses the fresh-snapshot guard.
+No unrelated containers, volumes, or files are removed.
+
+The runner's startup and lifecycle behavior can be tested with Python 3 and `jq`
+without Docker:
+
+```sh
+python3 -B -m unittest discover -s tests -p 'test_feldera_docker_runner.py'
+```
+
+## Linux (native host processes)
 
 This runs two host processes: the repository's PostgreSQL 18 build and a local
 Feldera pipeline manager. There are no containers or cloud services. PostgreSQL
