@@ -2928,6 +2928,7 @@ dependencies = [
  "dbsp",
  "pgrx",
  "pgrx-tests",
+ "serde_json",
 ]
 
 [[package]]
